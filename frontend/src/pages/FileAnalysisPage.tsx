@@ -64,22 +64,25 @@ function FileAnalysisPage() {
           body: formData,
         }
       );
-      console.log(response);
 
       if (!response.ok) {
-        throw new Error("Failed to analyze the file");
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to analyze the file");
       }
 
       const data = await response.json();
+      console.log("Analysis data:", data); // Debug log
+      
+      if (!data || Object.keys(data).length === 0) {
+        throw new Error("No analysis results received");
+      }
+
       setResults(data);
       setIsAnalyzing(false);
       setAnalysisComplete(true);
-      setTimeout(() => {
-        setIsAnalyzing(false);
-        setAnalysisComplete(true);
-      }, 2000);
     } catch (error) {
       console.error("Error during file analysis:", error);
+      alert(error.message || "Failed to analyze file. Please try again.");
       setIsAnalyzing(false);
     }
   };

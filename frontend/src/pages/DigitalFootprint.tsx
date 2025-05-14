@@ -68,6 +68,55 @@ const initialEdges: Edge[] = [
   { id: "e1-5", source: "1", target: "5", animated: true },
 ];
 
+interface FootprintData {
+  query: string;
+  type: 'email' | 'phone' | 'username' | null;
+  email_scan: {
+    exposed: boolean;
+    breaches: Array<{
+      breach: string;
+      details: string;
+      xposed_data: string;
+      xposed_records: string;
+      references: string;
+    }>;
+    password_strength: Array<{
+      EasyToCrack: number;
+      PlainText: number;
+      StrongHash: number;
+      Unknown: number;
+    }>;
+    risk: Array<{
+      risk_label: 'high' | 'medium' | 'low';
+      risk_score: number;
+    }>;
+  } | null;
+  phone_scan: {
+    valid: boolean;
+    number: string;
+    local_format: string;
+    international_format: string;
+    country_code: string;
+    country_name: string;
+    location: string;
+    carrier: string;
+    line_type: string;
+  } | null;
+  username_scan: Array<{
+    site: string;
+    url: string;
+  }> | null;
+}
+
+interface SiteIcon {
+  [key: string]: string;
+}
+
+interface UsernameEntry {
+  site: string;
+  url: string;
+}
+
 function DigitalFootprint() {
   const [isScanning, setIsScanning] = useState(false);
   const [scanComplete, setScanComplete] = useState(false);
@@ -90,7 +139,7 @@ function DigitalFootprint() {
   const getRecommendations = async (data: any) => {
     setIsLoadingRecommendations(true);
     try {
-      const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" });
+      const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
 
       let prompt =
         "Based on the following digital footprint data, provide specific security recommendations and privacy advice in a concise manner. ";
@@ -117,40 +166,251 @@ function DigitalFootprint() {
     }
   };
 
-  async function fetchData() {
+  const mapApiResponseToGraph = (data: FootprintData) => {
+    const nodes: Node[] = [];
+    const edges: Edge[] = [];
+
+    // Create central node for the query
+    const centralNodeId = "central-node";
+    nodes.push({
+      id: centralNodeId,
+      data: {
+        label: data.query,
+        type: data.type || "unknown",
+        details: {
+          value: data.query,
+          riskLevel: "unknown",
+          description: `Type: ${data.type || "unknown"}`,
+        },
+      },
+      position: { x: 0, y: 0 },
+      className: "bg-gray-500 text-white rounded-lg p-2 shadow-lg",
+    });
+
+    // Handle email scan results from HaveIBeenPwned API
+    if (data.type === "email" && data.email_scan) {
+      const emailScan = data.email_scan;
+      
+      // Add breach check node
+      const breachNodeId = "breach-check-node";
+      nodes.push({
+        id: breachNodeId,
+        data: {
+          label: "Data Breach Check",
+          type: "breach",
+          details: {
+            value: emailScan.exposed ? "Exposed in Breaches" : "No Breaches Found",
+            riskLevel: emailScan.risk?.[0]?.risk_label || "unknown",
+            description: emailScan.exposed 
+              ? `Found in ${emailScan.breaches.length} data breaches`
+              : "No known data breaches found",
+          },
+        },
+        position: { x: -200, y: -100 },
+        className: emailScan.exposed ? "bg-red-500" : "bg-green-500" + " text-white rounded-lg p-2 shadow-lg",
+      });
+      edges.push({
+        id: `e-${centralNodeId}-${breachNodeId}`,
+        source: centralNodeId,
+        target: breachNodeId,
+        animated: true,
+      });
+
+      // Add breach details if found
+      if (emailScan.exposed && emailScan.breaches) {
+        emailScan.breaches.forEach((breach, index) => {
+          const breachDetailId = `breach-detail-${index}`;
+          const angle = (index / emailScan.breaches.length) * 2 * Math.PI;
+          const radius = 150;
+          const x = Math.cos(angle) * radius - 200;
+          const y = Math.sin(angle) * radius - 100;
+
+          nodes.push({
+            id: breachDetailId,
+            data: {
+              label: breach.breach,
+              type: "breach-detail",
+              details: {
+                value: breach.breach,
+                riskLevel: "high",
+                description: [
+                  `Details: ${breach.details}`,
+                  `Exposed Data: ${breach.xposed_data}`,
+                  `Records: ${breach.xposed_records}`,
+                  `<a href="${breach.references}" target="_blank" class="text-blue-500">More Info</a>`,
+                ].join("<br/>"),
+              },
+            },
+            position: { x, y },
+            className: "bg-red-600 text-white rounded-lg p-2 shadow-lg",
+          });
+
+          edges.push({
+            id: `e-${breachNodeId}-${breachDetailId}`,
+            source: breachNodeId,
+            target: breachDetailId,
+            animated: true,
+          });
+        });
+      }
+
+      // Add password strength analysis if available
+      if (emailScan.password_strength) {
+        const strengthNodeId = "password-strength-node";
+        nodes.push({
+          id: strengthNodeId,
+          data: {
+            label: "Password Strength Analysis",
+            type: "security",
+            details: {
+              value: "Password Security Metrics",
+              riskLevel: "medium",
+              description: emailScan.password_strength.map(strength => [
+                `Easy to Crack: ${strength.EasyToCrack}`,
+                `Plain Text: ${strength.PlainText}`,
+                `Strong Hash: ${strength.StrongHash}`,
+                `Unknown: ${strength.Unknown}`,
+              ].join("<br/>")).join("<br/>"),
+            },
+          },
+          position: { x: 200, y: -100 },
+          className: "bg-yellow-500 text-white rounded-lg p-2 shadow-lg",
+        });
+        edges.push({
+          id: `e-${centralNodeId}-${strengthNodeId}`,
+          source: centralNodeId,
+          target: strengthNodeId,
+          animated: true,
+        });
+      }
+    }
+
+    // Handle phone scan results from NumVerify API
+    if (data.type === "phone" && data.phone_scan) {
+      const phoneScan = data.phone_scan;
+      
+      // Add phone info node
+      const phoneNodeId = "phone-info-node";
+      nodes.push({
+        id: phoneNodeId,
+        data: {
+          label: "Phone Information",
+          type: "phone",
+          details: {
+            value: phoneScan.number,
+            riskLevel: "low",
+            description: [
+              `Location: ${phoneScan.location}`,
+              `Carrier: ${phoneScan.carrier}`,
+              `Line Type: ${phoneScan.line_type}`,
+              `Country: ${phoneScan.country_name}`,
+            ].join("<br/>"),
+          },
+        },
+        position: { x: 0, y: -200 },
+        className: "bg-blue-500 text-white rounded-lg p-2 shadow-lg",
+      });
+      edges.push({
+        id: `e-${centralNodeId}-${phoneNodeId}`,
+        source: centralNodeId,
+        target: phoneNodeId,
+        animated: true,
+      });
+    }
+
+    // Only show username scan results from our OSINT API
+    // Only include entries that are confirmed as found (i.e., have a valid, non-empty URL)
+    const usernameScan = (data.username_scan || []).filter(
+      (entry) => entry && entry.url && entry.url.trim() !== ""
+    );
+    if (usernameScan.length > 0) {
+      const socialNodeId = "social-presence-node";
+      nodes.push({
+        id: socialNodeId,
+        data: {
+          label: "Found Online Presence",
+          type: "social",
+          details: {
+            value: `Found on ${usernameScan.length} platforms`,
+            riskLevel: "low",
+            description: "Verified online accounts",
+          },
+        },
+        position: { x: 0, y: 200 },
+        className: "bg-purple-500 text-white rounded-lg p-2 shadow-lg",
+      });
+      edges.push({
+        id: `e-${centralNodeId}-${socialNodeId}`,
+        source: centralNodeId,
+        target: socialNodeId,
+        animated: true,
+      });
+
+      // Add individual platform nodes
+      usernameScan.forEach((entry, index) => {
+        const nodeId = `platform-${index}`;
+        const angle = (index / usernameScan.length) * 2 * Math.PI;
+        const radius = 150;
+        const x = Math.cos(angle) * radius;
+        const y = Math.sin(angle) * radius + 200;
+
+        nodes.push({
+          id: nodeId,
+          data: {
+            label: entry.site,
+            type: "platform",
+            details: {
+              value: entry.url,
+              riskLevel: "low",
+              description: `<a href="${entry.url}" target="_blank" class="text-blue-500">Visit Profile</a>`,
+            },
+          },
+          position: { x, y },
+          className: "bg-purple-400 text-white rounded-lg p-2 shadow-lg",
+        });
+
+        edges.push({
+          id: `e-${socialNodeId}-${nodeId}`,
+          source: socialNodeId,
+          target: nodeId,
+          animated: true,
+        });
+      });
+    }
+
+    return { nodes, edges };
+  };
+
+  const fetchData = async () => {
     setIsLoading(true);
     try {
-      // Single API request
       const response = await fetch(`${import.meta.env.VITE_BACKEND_URL}/footprint`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          query: targetInput, // Example payload; replace with actual input data
+          query: targetInput,
         }),
       });
-  
+
       if (!response.ok) {
         throw new Error("Failed to fetch data");
       }
-  
-      // Parse the JSON from the response
+
       const data = await response.json();
-  
-      // Process and map the data to nodes and edges
       const { nodes, edges } = mapApiResponseToGraph(data);
       setNodes(nodes);
       setEdges(edges);
-  
-      // Call additional functions if needed
       await getRecommendations(data);
-    } catch (error) {
+      setScanComplete(true);
+    } catch (error: unknown) {
       console.error("Error fetching data:", error);
+      alert("Failed to scan digital footprint. Please try again.");
     } finally {
       setIsLoading(false);
     }
-  }
+  };
   
   const startScan = () => {
     if (!targetInput) {
@@ -184,392 +444,6 @@ function DigitalFootprint() {
       details: node.data.details,
     });
   }, []);
-
-  const mapApiResponseToGraph = (data: any) => {
-    const nodes: any[] = [];
-    const edges: any[] = [];
-
-    const nodeIdMapping: Record<string, string> = {};
-
-    const userNodeId = "user-node";
-    nodes.push({
-      id: userNodeId,
-      data: {
-        label: targetInput, // Use user input as the label
-        type: "input",
-        details: {
-          value: targetInput,
-          riskLevel: "unknown",
-          description: targetInput,
-        },
-      },
-      position: { x: 0, y: 0 },
-      className: "bg-gray-500 text-white rounded-lg p-2 shadow-lg",
-    });
-
-    // Create sub-nodes for the email scan details
-    const emailScanNodeId = "email-scan-node";
-
-    if (data.email_scan) {
-      // Check if there is an error or breach data
-      if (data.email_scan.error) {
-        // Handle case where there's an error message
-        nodes.push({
-          id: emailScanNodeId,
-          data: {
-            label: "Email Scan",
-            type: "email-scan",
-            details: {
-              value: "Email Scan Result",
-              description: `
-              <div>
-                <p class="text-red-500">${data.email_scan.error}</p>
-              </div>
-            `,
-            },
-          },
-          position: { x: 200, y: 150 },
-          className: "bg-red-500 text-white rounded-lg p-2 shadow-lg",
-        });
-        edges.push({
-          id: `e-${userNodeId}-${emailScanNodeId}`,
-          source: userNodeId,
-          target: emailScanNodeId,
-          animated: true,
-        });
-      } else {
-        // Handle case where breaches data exists
-        nodes.push({
-          id: emailScanNodeId,
-          data: {
-            label: "Email Scan",
-            type: "email-scan",
-            details: {
-              value: "Email Breaches",
-              description: data.email_scan.breaches
-                .map((breach: any) => {
-                  return `
-                  <div>
-                    <h5 class="font-semibold">${breach.breach}</h5>
-                    <p><strong>Details:</strong> ${breach.details}</p>
-                    <p><strong>Exposed Data:</strong> ${breach.xposed_data}</p>
-                    <p><strong>Records Exposed:</strong> ${breach.xposed_records}</p>
-                    <p><a href="${breach.references}" target="_blank" class="text-blue-500">More Info</a></p>
-                  </div>
-                `;
-                })
-                .join("<br/>"),
-            },
-          },
-          position: { x: 200, y: 200 },
-          className: "bg-red-500 text-white rounded-lg p-2 shadow-lg",
-        });
-
-        // Create sub-node for password strength
-        const passwordStrengthNodeId = "password-strength-node";
-        nodes.push({
-          id: passwordStrengthNodeId,
-          data: {
-            label: "Password Strength",
-            type: "password-strength",
-            details: {
-              value: "Password Strength Overview",
-              description: data.email_scan.password_strength
-                .map((strength: any) => {
-                  return `
-                <div>
-                  <p><strong>Easy To Crack:</strong> ${strength.EasyToCrack}</p>
-                  <p><strong>Plain Text:</strong> ${strength.PlainText}</p>
-                  <p><strong>Strong Hash:</strong> ${strength.StrongHash}</p>
-                  <p><strong>Unknown:</strong> ${strength.Unknown}</p>
-                </div>
-              `;
-                })
-                .join("<br/>"),
-            },
-          },
-          position: { x: 0, y: 200 },
-          className: "bg-yellow-500 text-white rounded-lg p-2 shadow-lg",
-        });
-
-        // Create sub-node for risk
-        const riskNodeId = "risk-node";
-        nodes.push({
-          id: riskNodeId,
-          data: {
-            label: "Risk",
-            type: "risk",
-            details: {
-              value: "Risk Assessment",
-              description: `
-            <div>
-              <p><strong>Risk Level:</strong> ${data.email_scan.risk[0].risk_label}</p>
-              <p><strong>Risk Score:</strong> ${data.email_scan.risk[0].risk_score}</p>
-            </div>
-          `,
-            },
-          },
-          position: { x: -200, y: 200 },
-          className: `${data.email_scan.risk[0].risk_label === 'high' ? 'bg-red-500' :
-            data.email_scan.risk[0].risk_label === 'low' ? 'bg-green-500' : 'bg-yellow-500'} text-white rounded-lg p-2 shadow-lg`,
-        });
-
-        // Create edges from the user node to each sub-node
-        edges.push(
-          {
-            id: `e-${userNodeId}-${emailScanNodeId}`,
-            source: userNodeId,
-            target: emailScanNodeId,
-            animated: true,
-          },
-          {
-            id: `e-${userNodeId}-${passwordStrengthNodeId}`,
-            source: userNodeId,
-            target: passwordStrengthNodeId,
-            animated: true,
-          },
-          {
-            id: `e-${userNodeId}-${riskNodeId}`,
-            source: userNodeId,
-            target: riskNodeId,
-            animated: true,
-          }
-        );
-      }
-    } else if (data.phone_scan) {
-      const phoneScanNodeId = "phone-scan-node";
-      if (data.phone_scan.phone_no == false) {
-        nodes.push({
-          id: phoneScanNodeId,
-          data: {
-            label: "Phone Scan",
-            type: "phone-scan",
-            details: {
-              value: "Phone Scan Result",
-              description: `
-                    <div>
-                      <p class="text-red-500">Record Not Found!, Phone Number maybe Invalid. Try adding your country code and check</p>
-                    </div>
-                  `,
-            },
-          },
-          position: { x: 50, y: 150 },
-          className: "bg-red-500 text-white rounded-lg p-2 shadow-lg",
-        });
-        edges.push({
-          id: `e-${userNodeId}-${phoneScanNodeId}`,
-          source: userNodeId,
-          target: phoneScanNodeId,
-          animated: true,
-        });
-      } else {
-        const countryLocationNodeId = `country-location-${userNodeId}`;
-        const carrierFormatsNodeId = `carrier-formats-${userNodeId}`;
-        const lineTypeNodeId = `line-type-${userNodeId}`;
-        const validityNodeId = `validity-${userNodeId}`;
-
-        const isValid = data.phone_scan.valid;
-
-        nodes.push({
-          id: countryLocationNodeId,
-          data: {
-            label: `Location: ${data.phone_scan.location}`,
-            type: "country-location",
-            details: {
-              value: "location info",
-              description: [
-                `Country Code: ${data.phone_scan.country_code}`,
-                `Location: ${data.phone_scan.location}`,
-              ].join("<br/>"),
-            },
-          },
-          position: { x: 280, y: 160 },
-          className: "bg-blue-500 text-white rounded-lg p-2 shadow-lg",
-        });
-
-        nodes.push({
-          id: carrierFormatsNodeId,
-          data: {
-            label: `Carrier: ${data.phone_scan.carrier}`,
-            type: "carrier-formats",
-            details: {
-              value: "carrier info",
-              description: [
-                `Carrier: ${data.phone_scan.carrier}`,
-                `International Format: ${data.phone_scan.international_format}`,
-                `Local Format: ${data.phone_scan.local_format}`,
-              ].join("<br/>"),
-            },
-          },
-          position: { x: 60, y: 180 },
-          className: "bg-purple-500 text-white rounded-lg p-2 shadow-lg",
-        });
-
-        nodes.push({
-          id: lineTypeNodeId,
-          data: {
-            label: `Line Type: ${data.phone_scan.line_type}`,
-            type: "line-type",
-            details: {
-              value: "line type info",
-              description: `Line Type: ${data.phone_scan.line_type}`,
-            },
-          },
-          position: { x: -200, y: 200 },
-          className: "bg-yellow-500 text-white rounded-lg p-2 shadow-lg",
-        });
-
-        nodes.push({
-          id: validityNodeId,
-          data: {
-            label: `${data.phone_scan.valid ? "Valid" : "Invalid"}`,
-            type: "validity",
-            details: {
-              value: "validity info",
-              description: `Validity: ${
-                data.phone_scan.valid ? "Valid" : "Invalid"
-              }`,
-            },
-          },
-          position: { x: 10, y: 60 },
-          className: "bg-green-500 text-white rounded-lg p-2 shadow-lg",
-        });
-
-        // Create edges to link the nodes
-        edges.push({
-          id: `e-${userNodeId}-${validityNodeId}`,
-          source: userNodeId,
-          target: validityNodeId,
-          animated: true,
-        });
-        if (isValid) {
-          edges.push({
-            id: `e-${validityNodeId}-${countryLocationNodeId}`,
-            source: validityNodeId,
-            target: countryLocationNodeId,
-            animated: true,
-          });
-          edges.push({
-            id: `e-${validityNodeId}-${carrierFormatsNodeId}`,
-            source: validityNodeId,
-            target: carrierFormatsNodeId,
-            animated: true,
-          });
-          edges.push({
-            id: `e-${validityNodeId}-${lineTypeNodeId}`,
-            source: validityNodeId,
-            target: lineTypeNodeId,
-            animated: true,
-          });
-        }
-      }
-    }
-
-    const usernameNodes = [];
-
-    // Function to return site-specific icons
-    function getIconForSite(site) {
-      const icons = {
-        GitHub:
-          "https://upload.wikimedia.org/wikipedia/commons/9/91/Octicons-mark-github.svg",
-        "GitHub Gist":
-          "https://upload.wikimedia.org/wikipedia/commons/e/e1/Octicons-gist.svg",
-        Freelancer:
-          "https://upload.wikimedia.org/wikipedia/commons/f/f3/Logo_Freelancer.svg",
-        Snapchat:
-          "https://upload.wikimedia.org/wikipedia/commons/a/a6/Snapchat_Logo_2022.png",
-        DeviantArt:
-          "https://upload.wikimedia.org/wikipedia/commons/1/1d/DeviantArt_logo_2016.svg",
-      };
-
-      // Default icon if no specific match
-      return (
-        icons[site] ||
-        "https://upload.wikimedia.org/wikipedia/commons/a/ac/No_image_available.svg"
-      );
-    }
-
-    if (data.username_scan && data.username_scan.length > 0) {
-      console.log(data);
-      data.username_scan.forEach((entry, index) => {
-        const { site, url } = entry;
-        const iconUrl = getIconForSite(site);
-        const nodeId = `username-${userNodeId}-${index}`;
-        console.log(site, url, iconUrl, nodeId, index);
-        const totalNodes = data.username_scan.length;
-    
-        // Constants for layout
-        const NODE_SPACING = 250; // Space between nodes
-        const BASE_Y = 150; // Base vertical position
-        const Y_OFFSET = 50; // Maximum height difference for the arc
-    
-        // Calculate horizontal position
-        const START_X = -(((totalNodes - 1) * NODE_SPACING) / 2);
-        const currentX = START_X + (index * NODE_SPACING);
-    
-        // Calculate vertical position using a parabolic function
-        // This creates an arc effect where edges are higher than the center
-        const normalizedPosition = (index / (totalNodes - 1)) * 2 - 1; // Range from -1 to 1
-        const yOffset = Y_OFFSET * (normalizedPosition * normalizedPosition); // Parabolic function
-        const currentY = BASE_Y - yOffset; // Subtract offset to move nodes up
-    
-        usernameNodes.push({
-          id: nodeId,
-          data: {
-            label: `${site}`,
-            type: "username-site",
-            details: {
-              value: url,
-              description: `URL: 
-              <a href="${url}" target="_blank" class="text-blue-500">${url}</a>
-              `,
-            },
-            icon: iconUrl,
-          },
-          position: {
-            x: currentX,
-            y: currentY,
-          },
-          className:
-            "bg-[#f87171] text-white rounded-lg p-2 shadow-lg flex items-center space-x-2",
-        });
-    
-        nodes.push(...usernameNodes);
-    
-        edges.push({
-          id: `edge-${userNodeId}-${nodeId}`,
-          source: userNodeId,
-          target: nodeId,
-          animated: true,
-        });
-      });
-    } else if (data.username_scan && data.username_scan.length === 0){
-      console.log(data);
-      usernameNodes.push({
-        id: `${userNodeId}-empty`,
-        data: {
-          label: "No Username Data Found",
-          type: "username-empty",
-          details: { value: "No results found" },
-          icon: "fas fa-exclamation-circle",
-        },
-        position: { x: NODE_SPACING, y: BASE_Y },
-        className:
-          "bg-gray-500 text-black rounded-lg p-2 shadow-lg flex items-center space-x-2",
-      });
-    
-      nodes.push(...usernameNodes);
-    
-      edges.push({
-        id: `edge-${userNodeId}-empty`,
-        source: userNodeId,
-        target: `${userNodeId}-empty`,
-        animated: false,
-      });
-    }
-
-    return { nodes, edges };
-  };
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">

@@ -149,18 +149,29 @@ function ScanPage() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          query: targetInput, // Example payload; replace with actual input data
+          query: targetInput,
         }),
       });
-      console.log(response);
-      if (!response.ok) throw new Error("Failed to fetch data");
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to fetch data");
+      }
+
       const data = await response.json();
+      console.log("Scan data:", data); // Debug log
+      
+      if (!data || Object.keys(data).length === 0) {
+        throw new Error("No data received from scan");
+      }
+
       const { nodes, edges } = mapApiResponseToGraph(data);
       setNodes(nodes);
       setEdges(edges);
       await getRecommendations(data);
     } catch (error) {
       console.error("Error fetching data:", error);
+      alert(error.message || "Failed to scan target. Please try again.");
     } finally {
       setIsLoading(false);
     }
