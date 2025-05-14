@@ -19,6 +19,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY src/ /app/src/
 
+# Ensure media directory exists for talos
+RUN mkdir -p /app/media
+
 EXPOSE 8000
 
 CMD ["python", "src/main.py"]
