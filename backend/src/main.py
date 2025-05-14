@@ -23,14 +23,7 @@ import networkx as nx
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app, resources={
-    r"/*": {
-        "origins": ["http://localhost:5173"],  # Your frontend URL
-        "methods": ["GET", "POST", "OPTIONS"],
-        "allow_headers": ["Content-Type"],
-        "supports_credentials": True
-    }
-})
+CORS(app, resources={r"/*": {"origins": ["http://localhost:5173", "https://recongraphy.vercel.app"], "supports_credentials": True, "allow_headers": "*", "methods": ["GET", "POST", "OPTIONS"]}})
 
 IP_REGEX = r'^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$'
 URL_REGEX = r'^([a-zA-Z0-9-]+\.)*[a-zA-Z0-9-]+\.[a-zA-Z]{2,}$'
