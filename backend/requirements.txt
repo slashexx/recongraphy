@@ -1,0 +1,6 @@
+flask
+requests
+pycti
+logger
+python-dotenv
+bs4
