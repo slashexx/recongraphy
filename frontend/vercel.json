@@ -1,0 +1,7 @@
+{  
+  "rewrites": [
+       { "source": "/proxy/:match*",
+         "destination": "http://aswinr24-tech.me/:match*"
+       } 
+ ]
+}
