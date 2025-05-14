@@ -12,41 +12,24 @@ from osint.internetdb import internetdb
 from osint.xposedornot import checkEmail
 from osint.phone import validate_phone_number
 from osint.username import sagemode_wrapper
-from file.capa import capa
 import tempfile
 import os
-from flask import Flask, request, jsonify
-from flask_cors import CORS
-from groclake.modellake import ModelLake
+import pefile
+import yara
 from dotenv import load_dotenv
+import time
 
 load_dotenv()
 
-GROCLAKE_API_KEY = os.getenv('GROCLAKE_API_KEY')
-GROCLAKE_ACCOUNT_ID = os.getenv('GROCLAKE_ACCOUNT_ID')
-
-# Initialize ModelLake instance
-model_lake = ModelLake()
-
-# Initialize conversation history
-conversation_history = [
-    {
-        "role": "system", 
-        "content": """You are a cybersecurity expert assistant specializing in:
-        1. Attack surface monitoring and reduction
-        2. Digital footprint analysis and protection
-        3. File malware analysis and security
-        4. Data privacy and protection strategies
-        5. Organizational security best practices
-
-        Provide practical, actionable advice while explaining security concepts in an accessible way.
-        Focus on helping users understand and implement security measures for their organization.
-        When discussing threats or vulnerabilities, always provide mitigation strategies.
-        """
-    }
-]
 app = Flask(__name__)
-CORS(app, supports_credentials=True) 
+CORS(app, resources={
+    r"/*": {
+        "origins": ["http://localhost:5173"],  # Your frontend URL
+        "methods": ["GET", "POST", "OPTIONS"],
+        "allow_headers": ["Content-Type"],
+        "supports_credentials": True
+    }
+})
 
 IP_REGEX = r'^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$'
 URL_REGEX = r'^([a-zA-Z0-9-]+\.)*[a-zA-Z0-9-]+\.[a-zA-Z]{2,}$'
@@ -64,39 +47,55 @@ def home():
 
 @app.route('/scan', methods=['POST'])
 def scan():
-    # Get the input query from the request body
-    body = request.get_json()
-    ip_or_domain = body.get('query')
+    try:
+        # Get the input query from the request body
+        body = request.get_json()
+        if not body or 'query' not in body:
+            return jsonify({"error": "No query provided in request body"}), 400
+            
+        ip_or_domain = body.get('query')
+        if not ip_or_domain:
+            return jsonify({"error": "Empty query provided"}), 400
 
-    if not ip_or_domain:
-        return jsonify({"error": "No IP or domain provided."}), 400
+        if re.match(IP_REGEX, ip_or_domain):
+            input_type = 'ip'
+            ip_to_scan = ip_or_domain
+            url_to_scan = None
+        elif re.match(URL_REGEX, ip_or_domain):
+            input_type = 'domain'
+            try:
+                ip_to_scan = socket.gethostbyname(ip_or_domain)  # Resolve domain to IP
+                url_to_scan = ip_or_domain  # Keep the URL as it is
+            except socket.gaierror:
+                return jsonify({"error": f"Unable to resolve domain: {ip_or_domain}"}), 400
+        else:
+            return jsonify({"error": "Invalid IP or domain format"}), 400
 
-    if re.match(IP_REGEX, ip_or_domain):
-        input_type = 'ip'
-        ip_to_scan = ip_or_domain
-        url_to_scan = None
-    elif re.match(URL_REGEX, ip_or_domain):
-        input_type = 'domain'
-        try:
-            ip_to_scan = socket.gethostbyname(ip_or_domain)  # Resolve domain to IP
-            url_to_scan = ip_or_domain  # Keep the URL as it is
-        except socket.gaierror:
-            return jsonify({"error": f"Unable to resolve domain: {ip_or_domain}"}), 400
-    else:
-        return jsonify({"error": "Invalid IP or domain format."}), 400
-    results = {}
+        results = {}
 
-    if ip_to_scan:
-        results["ipapi"] = ipapi(ip_to_scan)
-        results["talos"] = talos(ip_to_scan)
-        results["tor"] = tor(ip_to_scan)
-        results["internetdb"] = internetdb(ip_to_scan)
+        if ip_to_scan:
+            try:
+                results["ipapi"] = ipapi(ip_to_scan)
+                results["talos"] = talos(ip_to_scan)
+                results["tor"] = tor(ip_to_scan)
+                results["internetdb"] = internetdb(ip_to_scan)
+            except Exception as e:
+                print(f"Error during IP scanning: {str(e)}")
+                results["error"] = f"Error during IP scanning: {str(e)}"
 
-    if url_to_scan:
-        results["tranco"] = tranco(url_to_scan) 
-        results["threatfox"] = threatfox(url_to_scan) 
+        if url_to_scan:
+            try:
+                results["tranco"] = tranco(url_to_scan)
+                results["threatfox"] = threatfox(url_to_scan)
+            except Exception as e:
+                print(f"Error during URL scanning: {str(e)}")
+                results["error"] = f"Error during URL scanning: {str(e)}"
 
-    return jsonify(results)
+        return jsonify(results)
+
+    except Exception as e:
+        print(f"Unexpected error in scan endpoint: {str(e)}")
+        return jsonify({"error": f"Unexpected error: {str(e)}"}), 500
 
 @app.route('/footprint', methods=['POST'])
 def footprint():
@@ -129,50 +128,116 @@ def footprint():
     return jsonify(results)
 
 
-@app.route("/capa_analyze", methods=["POST"])
+@app.route("/capa_analyze", methods=["POST", "OPTIONS"])
 def upload_file():
+    if request.method == "OPTIONS":
+        return "", 200
+        
     if "file" not in request.files:
         return jsonify({"error": "No file part"}), 400
 
     file = request.files["file"]
-    print(file)
-
     if file.filename == "":
         return jsonify({"error": "No selected file"}), 400
 
-    with tempfile.NamedTemporaryFile(delete=True) as temp_file:
-        temp_file.write(file.read())
-        temp_file_path = temp_file.name
-        print(temp_file_path)
-
-        capa_results = capa(temp_file_path)
-
-        return capa_results
-    
-@app.route('/chat', methods=['POST'])
-def chat():
-    """Simple chat endpoint"""
-    user_message = request.json.get('message')
-    
-    if not user_message:
-        return jsonify({'error': 'Message is required'}), 400
-    
-    # Add user message to history
-    conversation_history.append({"role": "user", "content": user_message})
-    
+    temp_file_path = None
     try:
-        # Get response from model
-        payload = {"messages": conversation_history}
-        response = model_lake.chat_complete(payload)
-        bot_reply = response.get("answer", "I'm sorry, I couldn't process that. Please try again.")
+        # Create a temporary file with a unique name
+        temp_file_path = os.path.join(tempfile.gettempdir(), f"analysis_{os.urandom(8).hex()}")
         
-        # Add bot response to history
-        conversation_history.append({"role": "assistant", "content": bot_reply})
-        
-        return jsonify({'response': bot_reply})
-        
+        # Save the uploaded file directly to the temp path
+        file.save(temp_file_path)
+
+        # Initialize analysis results
+        analysis_result = {
+            "file_info": {
+                "name": file.filename,
+                "size": os.path.getsize(temp_file_path)
+            },
+            "pe_info": {},
+            "risk_level": "Low",
+            "categories": {
+                "Defense Evasion": [],
+                "Execution": [],
+                "Discovery": [],
+                "Persistence": []
+            }
+        }
+
+        # Try to analyze as PE file
+        try:
+            pe = pefile.PE(temp_file_path)
+            
+            # Get PE information
+            analysis_result["pe_info"] = {
+                "machine_type": hex(pe.FILE_HEADER.Machine),
+                "timestamp": pe.FILE_HEADER.TimeDateStamp,
+                "sections": [section.Name.decode().rstrip('\x00') for section in pe.sections],
+                "imports": []
+            }
+
+            # Get imports
+            if hasattr(pe, 'DIRECTORY_ENTRY_IMPORT'):
+                for entry in pe.DIRECTORY_ENTRY_IMPORT:
+                    dll_name = entry.dll.decode()
+                    imports = [imp.name.decode() for imp in entry.imports if imp.name]
+                    analysis_result["pe_info"]["imports"].append({
+                        "dll": dll_name,
+                        "functions": imports
+                    })
+
+                    # Categorize imports
+                    if any(x in dll_name.lower() for x in ['kernel32', 'ntdll']):
+                        analysis_result["categories"]["Execution"].extend(imports)
+                    if any(x in dll_name.lower() for x in ['advapi32', 'user32']):
+                        analysis_result["categories"]["Persistence"].extend(imports)
+                    if any(x in dll_name.lower() for x in ['ws2_32', 'wininet']):
+                        analysis_result["categories"]["Discovery"].extend(imports)
+
+        except pefile.PEFormatError:
+            analysis_result["pe_info"]["error"] = "Not a valid PE file"
+        except Exception as e:
+            analysis_result["pe_info"]["error"] = str(e)
+
+        return jsonify(analysis_result)
+
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        print(f"Error during analysis: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        # Clean up temp file in finally block to ensure it happens
+        if temp_file_path and os.path.exists(temp_file_path):
+            try:
+                # Add a small delay to ensure all file handles are released
+                time.sleep(0.1)
+                os.unlink(temp_file_path)
+            except Exception as e:
+                print(f"Error cleaning up temp file: {str(e)}")
+
+# @app.route('/chat', methods=['POST'])
+# def chat():
+#     """Simple chat endpoint"""
+#     user_message = request.json.get('message')
+    
+#     if not user_message:
+#         return jsonify({'error': 'Message is required'}), 400
+    
+#     # Add user message to history
+#     conversation_history.append({"role": "user", "content": user_message})
+    
+#     try:
+#         # Get response from model
+#         payload = {"messages": conversation_history}
+#         response = model_lake.chat_complete(payload)
+#         bot_reply = response.get("answer", "I'm sorry, I couldn't process that. Please try again.")
+        
+#         # Add bot response to history
+#         conversation_history.append({"role": "assistant", "content": bot_reply})
+        
+#         return jsonify({'response': bot_reply})
+        
+#     except Exception as e:
+#         return jsonify({'error': str(e)}), 500
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8000, debug=True)

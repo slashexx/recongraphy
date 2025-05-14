@@ -15,7 +15,13 @@ import {
   X,
   ChevronRight,
   ExternalLink,
+  Bot,
 } from "lucide-react";
+import { GoogleGenerativeAI } from "@google/generative-ai";
+import ReactMarkdown from "react-markdown";
+
+// Initialize Gemini
+const genAI = new GoogleGenerativeAI(import.meta.env.VITE_GEMINI_API_KEY);
 
 interface TimelineEvent {
   id: number;
@@ -42,6 +48,8 @@ function FileAnalysisPage() {
   const [results, setResults] = useState<any>(null);
   const [selectedEvent, setSelectedEvent] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [geminiAnalysis, setGeminiAnalysis] = useState<string>("");
+  const [isAnalyzingWithGemini, setIsAnalyzingWithGemini] = useState(false);
 
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -53,6 +61,11 @@ function FileAnalysisPage() {
 
   const startAnalysis = async (file: File) => {
     setIsAnalyzing(true);
+    setAnalysisComplete(false);
+    setResults(null);
+    setErrorMessage("");
+    setGeminiAnalysis("");
+    
     const formData = new FormData();
     formData.append("file", file);
 
@@ -62,6 +75,10 @@ function FileAnalysisPage() {
         {
           method: "POST",
           body: formData,
+          credentials: 'include',
+          headers: {
+            'Accept': 'application/json',
+          },
         }
       );
 
@@ -71,18 +88,21 @@ function FileAnalysisPage() {
       }
 
       const data = await response.json();
-      console.log("Analysis data:", data); // Debug log
+      console.log("Analysis results:", data);
       
-      if (!data || Object.keys(data).length === 0) {
-        throw new Error("No analysis results received");
+      if (data.error) {
+        throw new Error(data.error);
       }
 
       setResults(data);
-      setIsAnalyzing(false);
       setAnalysisComplete(true);
+      
+      // Start Gemini analysis
+      await analyzeWithGemini(data);
     } catch (error) {
       console.error("Error during file analysis:", error);
-      alert(error.message || "Failed to analyze file. Please try again.");
+      setErrorMessage(error instanceof Error ? error.message : "An error occurred during analysis");
+    } finally {
       setIsAnalyzing(false);
     }
   };
@@ -109,10 +129,27 @@ function FileAnalysisPage() {
 
   useEffect(() => {
     if (results && !results.error) {
-      const timeline = Object.entries(results)
-        .flatMap(([category, events]) =>
-          events.map((event: any) => ({ category, ...event }))
-        )
+      // Transform results into timeline format
+      const timeline = Object.entries(results.categories)
+        .flatMap(([category, techniques]) => {
+          if (Array.isArray(techniques)) {
+            return techniques.map(technique => ({
+              category,
+              techniqueName: technique,
+              description: `Found in ${category} category`,
+              url: `https://attack.mitre.org/techniques/${technique}`,
+              details: {
+                apis: [technique],
+                strings: [],
+                metadata: {
+                  offset: '',
+                  section: ''
+                }
+              }
+            }));
+          }
+          return [];
+        })
         .filter((event) =>
           Object.keys(event)
             .join(" ")
@@ -165,6 +202,29 @@ function FileAnalysisPage() {
       setErrorMessage(results.error); // Display error message
     }
   }, [analysisComplete, results, currentStep, filteredTimeline]);
+
+  const analyzeWithGemini = async (analysisData: any) => {
+    setIsAnalyzingWithGemini(true);
+    try {
+      const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+      
+      const prompt = `Analyze this file analysis report and determine if there are any malicious indicators. 
+      Focus on suspicious imports, behaviors, and patterns. Provide a concise assessment with specific concerns if any.
+      
+      Analysis Data:
+      ${JSON.stringify(analysisData, null, 2)}`;
+
+      const result = await model.generateContent(prompt);
+      const response = await result.response;
+      const text = response.text();
+      setGeminiAnalysis(text);
+    } catch (error) {
+      console.error("Error analyzing with Gemini:", error);
+      setGeminiAnalysis("Failed to analyze with Gemini. Please try again.");
+    } finally {
+      setIsAnalyzingWithGemini(false);
+    }
+  };
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
@@ -431,6 +491,47 @@ function FileAnalysisPage() {
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+      {analysisComplete && results && !results.error && (
+        <div className="bg-white dark:bg-zinc-800 shadow sm:rounded-lg mt-8">
+          <div className="px-4 py-5 sm:p-6">
+            <div className="flex items-center mb-4">
+              <Bot className="h-5 w-5 text-indigo-600 mr-2" />
+              <h3 className="text-lg font-medium text-gray-900 dark:text-white">
+                AI Analysis
+              </h3>
+            </div>
+            
+            {isAnalyzingWithGemini ? (
+              <div className="flex items-center justify-center py-4">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
+                <span className="ml-3 text-gray-600 dark:text-white">Analyzing with AI...</span>
+              </div>
+            ) : (
+              <div className="bg-zinc-900 rounded-lg p-6">
+                <div className="text-white space-y-4">
+                  <ReactMarkdown
+                    components={{
+                      p: ({node, ...props}) => <p className="text-white mb-4" {...props} />,
+                      h1: ({node, ...props}) => <h1 className="text-white text-xl font-bold mb-4" {...props} />,
+                      h2: ({node, ...props}) => <h2 className="text-white text-lg font-bold mb-3" {...props} />,
+                      h3: ({node, ...props}) => <h3 className="text-white text-base font-bold mb-2" {...props} />,
+                      strong: ({node, ...props}) => <strong className="text-white font-bold" {...props} />,
+                      em: ({node, ...props}) => <em className="text-white italic" {...props} />,
+                      li: ({node, ...props}) => <li className="text-white ml-4 mb-2" {...props} />,
+                      ul: ({node, ...props}) => <ul className="text-white list-disc mb-4" {...props} />,
+                      ol: ({node, ...props}) => <ol className="text-white list-decimal mb-4" {...props} />,
+                      blockquote: ({node, ...props}) => <blockquote className="text-white border-l-4 border-indigo-500 pl-4 my-4" {...props} />,
+                      code: ({node, ...props}) => <code className="text-white bg-zinc-800 px-2 py-1 rounded" {...props} />
+                    }}
+                  >
+                    {geminiAnalysis}
+                  </ReactMarkdown>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

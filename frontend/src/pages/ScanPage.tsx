@@ -79,28 +79,28 @@ function ScanPage() {
   const [recommendations, setRecommendations] = useState<string>("");
   const [isLoadingRecommendations, setIsLoadingRecommendations] =
     useState(false);
+  const [results, setResults] = useState<any>(null);
 
   // Function to get recommendations from Gemini
   const getRecommendations = async (data: any) => {
     setIsLoadingRecommendations(true);
     try {
-      const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" });
+      const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
       let prompt =
-        "Based on the following digital footprint data, provide specific security recommendations and privacy advice in a concise manner. ";
+        "Based on the following digital data of a website, provide specific security recommendations and privacy advice in a concise manner. ";
       prompt +=
         "Focus on actionable steps the user can take to improve their security and privacy. ";
       prompt +=
         "Format the response with bullet points and clear small concise sections.\n\n";
-      prompt += "Digital Footprint Data:\n";
+      prompt += "Scan Results Data:\n";
       prompt += JSON.stringify(data, null, 2);
 
       const result = await model.generateContent(prompt);
-      console.log(result);
       const response = result.response;
       const text = response.text();
-      console.log(text);
       setRecommendations(text);
+      setResults(data);
     } catch (error) {
       console.error("Error getting recommendations:", error);
       setRecommendations(
@@ -159,10 +159,9 @@ function ScanPage() {
       }
 
       const data = await response.json();
-      console.log("Scan data:", data); // Debug log
       
-      if (!data || Object.keys(data).length === 0) {
-        throw new Error("No data received from scan");
+      if (data.error) {
+        throw new Error(data.error);
       }
 
       const { nodes, edges } = mapApiResponseToGraph(data);
@@ -171,7 +170,8 @@ function ScanPage() {
       await getRecommendations(data);
     } catch (error) {
       console.error("Error fetching data:", error);
-      alert(error.message || "Failed to scan target. Please try again.");
+      // Show error to user
+      alert(error instanceof Error ? error.message : "An error occurred during scanning");
     } finally {
       setIsLoading(false);
     }
@@ -182,6 +182,17 @@ function ScanPage() {
       alert("Please enter a target domain, IP, or email");
       return;
     }
+
+    // Validate input format
+    const isIP = /^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/.test(targetInput);
+    const isDomain = /^([a-zA-Z0-9-]+\.)*[a-zA-Z0-9-]+\.[a-zA-Z]{2,}$/.test(targetInput);
+    const isEmail = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(targetInput);
+
+    if (!isIP && !isDomain && !isEmail) {
+      alert("Please enter a valid IP address, domain, or email");
+      return;
+    }
+
     fetchData();
     setIsScanning(true);
     setProgress(0);
@@ -214,8 +225,6 @@ function ScanPage() {
     const nodes: any[] = [];
     const edges: any[] = [];
 
-    const nodeIdMapping: Record<string, string> = {};
-
     const userNodeId = "user-node";
     nodes.push({
       id: userNodeId,
@@ -232,167 +241,108 @@ function ScanPage() {
       className: "bg-gray-500 text-white rounded-lg p-2 shadow-lg",
     });
 
-    if (!data || !data.ipapi.dns_info) {
-      console.error("Invalid or empty API response");
-      return { nodes, edges }; // Return empty nodes and edges
-    }
-    // Add DNS/IP information as the root node
-    const dnsIpNodeId = "dns-ip-node";
-    nodes.push({
-      id: dnsIpNodeId,
-      data: {
-        label: data.ipapi.dns_info.dns.geo || "Unknown Location",
-        type: "ip",
-        details: {
-          value: data.ipapi.dns_info.dns.ip,
-          riskLevel: "medium",
-          description: `Geo: ${data.ipapi.dns_info.dns.geo}`,
-        },
-      },
-      position: { x: 0, y: 150 },
-      className: "bg-green-500 text-white rounded-lg p-2 shadow-lg",
-    });
-
-    edges.push({
-      id: `e-${userNodeId}-${dnsIpNodeId}`,
-      source: userNodeId,
-      target: dnsIpNodeId,
-      animated: true,
-    });
-
-    if (!data || !data.ipapi.ip_info) {
-      console.error("Invalid or empty API response");
-      return { nodes, edges }; // Return empty nodes and edges
-    }
-
-    const threatNodeId = "threatfox-node";
-
-    if (data.threatfox && data.threatfox.ioc) {
+    // IPAPI DNS Info
+    if (data?.ipapi?.dns_info?.dns) {
+      const dns = data.ipapi.dns_info.dns;
+      const dnsIpNodeId = "dns-ip-node";
       nodes.push({
-        id: threatNodeId,
+        id: dnsIpNodeId,
         data: {
-          label: "ThreatFox",
-          type: "vulnerability",
+          label: `${dns.geo || "Unknown Location"} (${dns.ip})`,
+          type: "ip",
           details: {
-            value: data.threatfox.ioc,
-            riskLevel: "high",
-            description: `Malware: ${data.threatfox.malware}, Link: ${data.threatfox.link}`,
+            value: dns.ip,
+            riskLevel: "medium",
+            description: `Geo: ${dns.geo}`,
           },
         },
-        position: { x: 200, y: 200 },
-        className: "bg-red-500 text-white rounded-lg p-2 shadow-lg",
+        position: { x: 0, y: 150 },
+        className: "bg-green-500 text-white rounded-lg p-2 shadow-lg",
+      });
+      edges.push({
+        id: `e-${userNodeId}-${dnsIpNodeId}`,
+        source: userNodeId,
+        target: dnsIpNodeId,
+        animated: true,
       });
     }
 
-    const internetDbNodeId = "internetdb-node";
+    // IPAPI IP Info
+    if (Array.isArray(data?.ipapi?.ip_info)) {
+      data.ipapi.ip_info.forEach((ip: any, index: number) => {
+        const ipNodeId = `ip-info-${index}`;
+        nodes.push({
+          id: ipNodeId,
+          data: {
+            label: `${ip.as || "AS"} (${ip.city || "Unknown City"})`,
+            type: "ip",
+            details: {
+              value: ip.query,
+              riskLevel: "low",
+              description: [
+                `ISP: ${ip.isp}`,
+                `ORG: ${ip.org}`,
+                `Region: ${ip.region}`,
+                `Region Name: ${ip.regionName}`,
+                `Country: ${ip.country}`,
+                `Time Zone: ${ip.timezone}`,
+                `Zip: ${ip.zip}`,
+              ].join("<br/>")
+            },
+          },
+          position: { x: 200 * (index + 1), y: 100 },
+          className: "bg-blue-500 text-white rounded-lg p-2 shadow-lg",
+        });
+        edges.push({
+          id: `e-${userNodeId}-${ipNodeId}`,
+          source: userNodeId,
+          target: ipNodeId,
+          animated: true,
+        });
+      });
+    }
 
-    // Check if there's data to display (hostnames or ports)
-    const hasRelevantData =
-      data.internetdb.hostnames.length > 0 || data.internetdb.ports.length > 0;
-
-    if (hasRelevantData) {
+    // InternetDB
+    if (data?.internetdb) {
+      const internetDbNodeId = "internetdb-node";
+      const hostnames = data.internetdb.hostnames || [];
+      const ports = data.internetdb.ports || [];
+      const cves = data.internetdb.cves || [];
+      const tags = data.internetdb.tags || [];
       nodes.push({
         id: internetDbNodeId,
         data: {
-          label: "InternetDB",
+          label: `InternetDB (${hostnames.length} hostnames, ${ports.length} ports)` ,
           type: "vulnerability",
           details: {
             value: "Internet Database",
             riskLevel: "medium",
             description: [
-              data.internetdb.hostnames.length > 0
-                ? `Hostnames: <br/> ${data.internetdb.hostnames
-                    .map(
-                      (hostname: string) =>
-                        `<a href="http://${hostname}" target="_blank" class="text-blue-500 break-words" >${hostname}</a>`
-                    )
-                    .join("<br/>")}`
-                : "",
-              data.internetdb.ports.length > 0
-                ? `<br/>Ports: ${data.internetdb.ports.join(", ")} <br/>`
-                : "",
-              data.internetdb.cves.length > 0
-                ? `CVEs: <br/>${data.internetdb.cves
-                    .map((cve: any) => {
-                      const cveId = Object.keys(cve)[0];
-                      return `<a href="${cve[cveId]}" target="_blank" class="text-blue-500">${cveId}</a>`;
-                    })
-                    .join("<br/>")}`
-                : "",
-              data.internetdb.tags.length > 0
-                ? `<br/>Tags: ${data.internetdb.tags.join(", ")}`
-                : "",
-            ]
-              .filter(Boolean)
-              .join("\n"), // Filter out empty strings
+              hostnames.length > 0 ? `Hostnames: <br/>${hostnames.map((hostname: string) => `<a href=\"http://${hostname}\" target=\"_blank\" class=\"text-blue-500 break-words\">${hostname}</a>`).join("<br/>")}` : "",
+              ports.length > 0 ? `<br/>Ports: ${ports.join(", ")} <br/>` : "",
+              cves.length > 0 ? `CVEs: <br/>${cves.map((cve: any) => { const cveId = Object.keys(cve)[0]; return `<a href=\"${cve[cveId]}\" target=\"_blank\" class=\"text-blue-500\">${cveId}</a>`; }).join("<br/>")}` : "",
+              tags.length > 0 ? `<br/>Tags: ${tags.join(", ")}` : "",
+            ].filter(Boolean).join("\n"),
           },
         },
         position: { x: 0, y: 250 },
         className: "bg-purple-500 text-white rounded-lg p-2 shadow-lg",
       });
+      edges.push({
+        id: `e-${userNodeId}-${internetDbNodeId}`,
+        source: userNodeId,
+        target: internetDbNodeId,
+        animated: true,
+      });
     }
 
-    // Add IP info nodes
-    data.ipapi.ip_info.forEach((ip: any, index: number) => {
-      const ipNodeId = `ip-info-${index}`;
-      nodeIdMapping[ip.city] = ipNodeId;
-
-      nodes.push({
-        id: ipNodeId,
-        data: {
-          label: ip.as,
-          type: "ip",
-          details: {
-            value: "ip info",
-            riskLevel: "low",
-            description: [
-              `ISP: ${ip.isp}`,
-              `ORG: ${ip.org}`,
-              `Region: ${ip.region}`,
-              `Region Name: ${ip.regionName}`,
-              `Country: ${ip.country}`,
-              `Time Zone: ${ip.timezone}`,
-              `Zip: ${ip.zip}`,
-            ].join("<br/>"),
-          },
-        },
-        position: { x: 200 * (index + 1), y: 100 },
-        className: "bg-blue-500 text-white rounded-lg p-2 shadow-lg",
-      });
-
-      edges.push({
-        id: `e-${internetDbNodeId}-${ipNodeId}`, // Unique edge ID
-        target: internetDbNodeId, // Source node is InternetDB
-        source: ipNodeId, // Target node is the current IP info node
-        animated: true, // Optional: animated edge for a dynamic effect
-      });
-
-      // Create an edge from the user node to the current IP info node
-      edges.push({
-        id: `e-${userNodeId}-${ipNodeId}`, // Unique edge ID
-        source: userNodeId, // Source node is the user node
-        target: ipNodeId, // Target node is the current IP info node
-        animated: true, // Optional: animated edge for a dynamic effect
-      });
-      if (data.threatfox && data.threatfox.ioc) {
-        edges.push({
-          id: `e-${threatNodeId}-${ipNodeId}`, // Unique edge ID
-          target: threatNodeId, // Source node is InternetDB
-          source: ipNodeId, // Target node is the current IP info node
-          animated: true, // Optional: animated edge for a dynamic effect
-        });
-      }
-    });
-
-    // Add ThreatFox node
-
-    // Add additional nodes as needed
-    if (data.talos && typeof data.talos.blacklisted === "boolean") {
+    // Talos
+    if (data?.talos && typeof data.talos.blacklisted === "boolean") {
       const talosNodeId = "talos-node";
       nodes.push({
         id: talosNodeId,
         data: {
-          label: "Talos",
+          label: `Talos (Blacklisted: ${data.talos.blacklisted})`,
           type: "social",
           details: {
             value: "Blacklisted Status",
@@ -403,21 +353,46 @@ function ScanPage() {
         position: { x: -200, y: 200 },
         className: "bg-yellow-500 text-white rounded-lg p-2 shadow-lg",
       });
-
       edges.push({
-        id: `e-${dnsIpNodeId}-${talosNodeId}`,
+        id: `e-${userNodeId}-${talosNodeId}`,
         source: userNodeId,
         target: talosNodeId,
         animated: true,
       });
     }
 
-    if (data.tor && data.tor.exit_node) {
+    // ThreatFox
+    if (data?.threatfox && data.threatfox.ioc) {
+      const threatNodeId = "threatfox-node";
+      nodes.push({
+        id: threatNodeId,
+        data: {
+          label: `ThreatFox (${data.threatfox.malware || "No malware"})`,
+          type: "vulnerability",
+          details: {
+            value: data.threatfox.ioc,
+            riskLevel: "high",
+            description: `Malware: ${data.threatfox.malware}, Link: ${data.threatfox.link}`,
+          },
+        },
+        position: { x: 200, y: 200 },
+        className: "bg-red-500 text-white rounded-lg p-2 shadow-lg",
+      });
+      edges.push({
+        id: `e-${userNodeId}-${threatNodeId}`,
+        source: userNodeId,
+        target: threatNodeId,
+        animated: true,
+      });
+    }
+
+    // Tor
+    if (data?.tor && data.tor.exit_node) {
       const torNodeId = "tor-node";
       nodes.push({
         id: torNodeId,
         data: {
-          label: "Tor",
+          label: `Tor (Exit Node: ${data.tor.exit_node})`,
           type: "ip",
           details: {
             value: "Exit Node",
@@ -428,11 +403,35 @@ function ScanPage() {
         position: { x: -300, y: 150 },
         className: "bg-yellow-500 text-white rounded-lg p-2 shadow-lg",
       });
-
       edges.push({
-        id: `e-${dnsIpNodeId}-${torNodeId}`,
+        id: `e-${userNodeId}-${torNodeId}`,
         source: userNodeId,
         target: torNodeId,
+        animated: true,
+      });
+    }
+
+    // Tranco (if available)
+    if (data?.tranco && data.tranco.rank) {
+      const trancoNodeId = "tranco-node";
+      nodes.push({
+        id: trancoNodeId,
+        data: {
+          label: `Tranco Rank: ${data.tranco.rank}`,
+          type: "domain",
+          details: {
+            value: data.tranco.rank,
+            riskLevel: "low",
+            description: `Tranco rank for this domain: ${data.tranco.rank}`,
+          },
+        },
+        position: { x: 300, y: 300 },
+        className: "bg-blue-400 text-white rounded-lg p-2 shadow-lg",
+      });
+      edges.push({
+        id: `e-${userNodeId}-${trancoNodeId}`,
+        source: userNodeId,
+        target: trancoNodeId,
         animated: true,
       });
     }
@@ -547,6 +546,54 @@ function ScanPage() {
                     )
                   )}
                 </div>
+              </div>
+            )}
+
+            {/* Security Findings Summary */}
+            {(scanComplete || nodes.length > 0) && results && (
+              <div className="mt-8 bg-white dark:bg-zinc-900 shadow sm:rounded-lg p-6">
+                <h2 className="text-xl font-bold mb-4 text-gray-900 dark:text-white">Security Findings Summary</h2>
+                <ul className="list-disc ml-6 text-gray-800 dark:text-gray-200">
+                  {/* Blacklist status */}
+                  {results.talos && (
+                    <li>
+                      <span className="font-semibold">Talos Blacklist:</span> {results.talos.blacklisted ? <span className="text-red-500">Blacklisted</span> : <span className="text-green-500">Not Blacklisted</span>}
+                    </li>
+                  )}
+                  {/* ThreatFox malware */}
+                  {results.threatfox && results.threatfox.malware && (
+                    <li>
+                      <span className="font-semibold">ThreatFox Malware:</span> <span className="text-red-500">{results.threatfox.malware}</span> (<a href={results.threatfox.link} target="_blank" rel="noopener noreferrer" className="underline text-blue-500">Details</a>)
+                    </li>
+                  )}
+                  {/* InternetDB open ports */}
+                  {results.internetdb && results.internetdb.ports && results.internetdb.ports.length > 0 && (
+                    <li>
+                      <span className="font-semibold">Open Ports:</span> {results.internetdb.ports.join(", ")}
+                    </li>
+                  )}
+                  {/* InternetDB CVEs */}
+                  {results.internetdb && results.internetdb.cves && results.internetdb.cves.length > 0 && (
+                    <li>
+                      <span className="font-semibold">Vulnerabilities (CVEs):</span> {results.internetdb.cves.map((cve: any, idx: number) => {
+                        const cveId = Object.keys(cve)[0];
+                        return <a key={cveId} href={cve[cveId]} target="_blank" rel="noopener noreferrer" className="underline text-blue-500 mr-2">{cveId}</a>;
+                      })}
+                    </li>
+                  )}
+                  {/* InternetDB tags */}
+                  {results.internetdb && results.internetdb.tags && results.internetdb.tags.length > 0 && (
+                    <li>
+                      <span className="font-semibold">Tags:</span> {results.internetdb.tags.join(", ")}
+                    </li>
+                  )}
+                  {/* IPAPI ASN/ISP/Geo */}
+                  {results.ipapi && results.ipapi.ip_info && Array.isArray(results.ipapi.ip_info) && results.ipapi.ip_info.length > 0 && (
+                    <li>
+                      <span className="font-semibold">ASN/ISP/Geo:</span> {results.ipapi.ip_info[0].as} / {results.ipapi.ip_info[0].isp} / {results.ipapi.ip_info[0].country}
+                    </li>
+                  )}
+                </ul>
               </div>
             )}
 
