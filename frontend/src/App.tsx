@@ -223,7 +223,6 @@ function Footer() {
 
 function App() {
   const { theme, toggleTheme } = useTheme();
-
   return (
     <Router>
       <div className="min-h-screen flex dark:bg-black flex-col">
