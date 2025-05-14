@@ -7,3 +7,4 @@ bs4
 flask_cors
 pefile
 yara-python
+networkx

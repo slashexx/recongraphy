@@ -553,6 +553,24 @@ function ScanPage() {
             {(scanComplete || nodes.length > 0) && results && (
               <div className="mt-8 bg-white dark:bg-zinc-900 shadow sm:rounded-lg p-6">
                 <h2 className="text-xl font-bold mb-4 text-gray-900 dark:text-white">Security Findings Summary</h2>
+                {/* Risk Score */}
+                {results.risk && (
+                  <div className="mb-4">
+                    <span className="font-semibold">Risk Score: </span>
+                    <span className={
+                      results.risk.level === 'High' ? 'text-red-500 font-bold' :
+                      results.risk.level === 'Medium' ? 'text-yellow-500 font-bold' :
+                      'text-green-500 font-bold'
+                    }>
+                      {results.risk.score} / 100 ({results.risk.level})
+                    </span>
+                    {results.risk.details && results.risk.details.length > 0 && (
+                      <ul className="list-disc ml-6 mt-2 text-gray-800 dark:text-gray-200">
+                        {results.risk.details.map((d: string, i: number) => <li key={i}>{d}</li>)}
+                      </ul>
+                    )}
+                  </div>
+                )}
                 <ul className="list-disc ml-6 text-gray-800 dark:text-gray-200">
                   {/* Blacklist status */}
                   {results.talos && (

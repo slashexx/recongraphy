@@ -18,6 +18,7 @@ import pefile
 import yara
 from dotenv import load_dotenv
 import time
+import networkx as nx
 
 load_dotenv()
 
@@ -44,6 +45,50 @@ PHONE_REGEX = r'^\+?[0-9]\d{1,14}$'
 @app.route('/')
 def home():
     return "Welcome to the ReconGraph"
+
+def safe_get(d, key, default):
+    if d is None:
+        return default
+    return d.get(key, default)
+
+def calculate_risk_score(results):
+    score = 0
+    details = []
+    # Open ports (each open port adds risk)
+    ports = safe_get(results.get('internetdb', {}), 'ports', [])
+    if ports:
+        score += min(len(ports) * 5, 30)  # up to 30 points
+        details.append(f"Open ports: {len(ports)}")
+    # CVEs (each CVE adds risk)
+    cves = safe_get(results.get('internetdb', {}), 'cves', [])
+    if cves:
+        score += min(len(cves) * 10, 30)  # up to 30 points
+        details.append(f"CVEs: {len(cves)}")
+    # Blacklist (high risk)
+    if safe_get(results.get('talos', {}), 'blacklisted', False):
+        score += 25
+        details.append("Blacklisted by Talos")
+    # Malware (high risk)
+    if safe_get(results.get('threatfox', {}), 'malware', None):
+        score += 25
+        details.append("Malware detected by ThreatFox")
+    # Tags (certain tags add risk)
+    tags = safe_get(results.get('internetdb', {}), 'tags', [])
+    risky_tags = {'honeypot', 'malware', 'botnet', 'spam', 'proxy'}
+    tag_risk = len(set(tags) & risky_tags) * 5
+    score += tag_risk
+    if tag_risk:
+        details.append(f"Risky tags: {', '.join(set(tags) & risky_tags)}")
+    # Clamp score to 0-100
+    score = min(score, 100)
+    # Risk level
+    if score >= 70:
+        level = 'High'
+    elif score >= 40:
+        level = 'Medium'
+    else:
+        level = 'Low'
+    return {"score": score, "level": level, "details": details}
 
 @app.route('/scan', methods=['POST'])
 def scan():
@@ -90,6 +135,9 @@ def scan():
             except Exception as e:
                 print(f"Error during URL scanning: {str(e)}")
                 results["error"] = f"Error during URL scanning: {str(e)}"
+
+        # Add risk score
+        results["risk"] = calculate_risk_score(results)
 
         return jsonify(results)
 
@@ -213,6 +261,19 @@ def upload_file():
                 os.unlink(temp_file_path)
             except Exception as e:
                 print(f"Error cleaning up temp file: {str(e)}")
+
+@app.route('/pagerank', methods=['POST'])
+def pagerank():
+    data = request.get_json()
+    nodes = data.get('nodes', [])
+    edges = data.get('edges', [])
+    G = nx.DiGraph()
+    for node in nodes:
+        G.add_node(node['id'])
+    for edge in edges:
+        G.add_edge(edge['source'], edge['target'])
+    pr = nx.pagerank(G, alpha=0.85)
+    return jsonify({'pagerank': pr})
 
 # @app.route('/chat', methods=['POST'])
 # def chat():
